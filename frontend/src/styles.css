@@ -612,6 +612,65 @@ td.num .num-sub { font-size: 11.5px; }
 }
 .add-inline input { flex: 1; min-width: 260px; max-width: none; }
 .add-inline a { color: var(--accent-ink); }
+.card-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ---- Product-detail: Google discovery panel -------------------------------- */
+/* A found-shops review list, tinted with the accent so it reads as a staging
+   area: nothing here is tracked until you tick it and confirm. */
+.discover {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.discover-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 14px 20px;
+}
+.discover-head input { flex: 1; min-width: 240px; max-width: none; margin: 0; }
+.discover-status { padding: 0 20px 14px; font-size: 13px; color: var(--muted); }
+.discover-status .note { margin-top: 0; }
+
+.discover-list { border-top: 1px solid var(--border); }
+.discover-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13.5px; color: var(--text); cursor: pointer;
+  transition: background .12s ease;
+}
+.discover-row:last-child { border-bottom: none; }
+.discover-row:hover { background: var(--surface); }
+.discover-row.on { background: var(--accent-weak); color: var(--ink); }
+.discover-row.off { opacity: .55; cursor: default; }
+.discover-row input[type="checkbox"] {
+  flex: 0 0 auto; width: 16px; height: 16px; margin: 0;
+  accent-color: var(--accent); cursor: pointer;
+}
+.discover-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.discover-title {
+  font-weight: 500; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.discover-sub {
+  font-size: 11.5px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.discover-sub a { color: var(--accent-ink); }
+.discover-price {
+  flex: 0 0 auto;
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: 14px; font-weight: 600; color: var(--ink);
+}
+.discover-verdict { flex: 0 0 auto; min-width: 108px; text-align: right; }
+.discover-foot {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 14px 20px;
+}
+.discover-foot .hint { margin-top: 0; flex: 1 1 220px; }
+
+@media (max-width: 640px) {
+  .discover-row { flex-wrap: wrap; }
+  .discover-verdict { min-width: 0; text-align: left; }
+}
 
 /* ---- Product-detail: compact history grid ---------------------------------- */
 .history-grid {

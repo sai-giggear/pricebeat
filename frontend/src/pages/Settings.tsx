@@ -144,6 +144,9 @@ export default function Settings() {
     setSyncNote(null);
     try {
       const res = await api.sync();
+      // The new catalogue drives steps 2 and 3 (counts, brand/category panels,
+      // product picker), so reload it rather than leaving the pre-sync one up.
+      await refetch();
       const bits = [`Synced ${res.synced} product${res.synced === 1 ? "" : "s"}`];
       if (res.removed) bits.push(`removed ${res.removed} stale`);
       setSyncNote({ text: `${bits.join(", ")}.`, ok: true });

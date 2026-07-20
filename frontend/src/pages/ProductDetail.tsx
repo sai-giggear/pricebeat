@@ -1,10 +1,11 @@
 import { createResource, createSignal, For, Show } from "solid-js";
 import { A, useParams } from "@solidjs/router";
-import { api } from "../api";
+import { api, type DiscoverResult } from "../api";
 import { belowRegularPct, dateTime, discountPct, gapPct, money, num, pct1, timeAgo } from "../format";
 import Favicon from "../components/Favicon";
 import FetchIcon from "../components/FetchIcon";
 import ProductPicker from "../components/ProductPicker";
+import SearchIcon from "../components/SearchIcon";
 import Sparkline from "../components/Sparkline";
 
 export default function ProductDetail() {
@@ -20,6 +21,58 @@ export default function ProductDetail() {
   const [adding, setAdding] = createSignal(false);
   // Mapping id whose "move to another product" picker is open, if any.
   const [reassigning, setReassigning] = createSignal<number | null>(null);
+  // Google-search discovery: the panel is open, the (editable) query, the
+  // results, and which of them are ticked to be tracked.
+  const [showFind, setShowFind] = createSignal(false);
+  const [query, setQuery] = createSignal("");
+  const [searching, setSearching] = createSignal(false);
+  const [found, setFound] = createSignal<DiscoverResult | null>(null);
+  const [findError, setFindError] = createSignal("");
+  const [picked, setPicked] = createSignal<string[]>([]);
+  const [addingFound, setAddingFound] = createSignal(false);
+
+  async function findCompetitors(q?: string) {
+    setShowFind(true);
+    setSearching(true);
+    setFindError("");
+    setFound(null);
+    try {
+      const res = await api.discover(detail()!.id, q);
+      setFound(res);
+      setQuery(res.query);
+      // Pre-tick the listings that priced cleanly and match this product;
+      // "check match" verdicts are shown but left for you to judge.
+      setPicked(res.candidates.filter((c) => c.suggested).map((c) => c.url));
+    } catch (err) {
+      setFindError((err as Error).message);
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  function togglePick(url: string) {
+    const cur = picked();
+    setPicked(cur.includes(url) ? cur.filter((u) => u !== url) : [...cur, url]);
+  }
+
+  async function addPicked() {
+    setAddingFound(true);
+    setFindError("");
+    try {
+      const res = await api.discoverAdd(detail()!.id, picked());
+      if (res.skipped.length) {
+        setFindError(`Skipped ${res.skipped.length}: ${res.skipped[0].reason}`);
+      } else {
+        setShowFind(false);
+        setFound(null);
+      }
+      await refetch();
+    } catch (err) {
+      setFindError((err as Error).message);
+    } finally {
+      setAddingFound(false);
+    }
+  }
 
   async function trackAll() {
     setTrackingAll(true);
@@ -221,9 +274,20 @@ export default function ProductDetail() {
             <div class="card tight">
               <div class="card-head">
                 <div class="card-title">Tracked competitors</div>
-                <button class="btn-mini" onClick={() => setShowAdd(!showAdd())}>
-                  {showAdd() ? "Close" : "+ Add competitor product"}
-                </button>
+                <div class="card-actions">
+                  <button
+                    class="btn-mini"
+                    disabled={searching()}
+                    title="Search Google for shops selling this product, in your market"
+                    onClick={() => (showFind() ? setShowFind(false) : findCompetitors())}
+                  >
+                    <Show when={!searching()}><SearchIcon /></Show>
+                    {searching() ? "Searching…" : showFind() ? "Close search" : "Find on Google"}
+                  </button>
+                  <button class="btn-mini" onClick={() => setShowAdd(!showAdd())}>
+                    {showAdd() ? "Close" : "+ Add competitor product"}
+                  </button>
+                </div>
               </div>
               <Show when={showAdd()}>
                 <form onSubmit={addMapping} class="add-inline">
@@ -243,6 +307,134 @@ export default function ProductDetail() {
                     <span class="badge bad">{error()}</span>
                   </Show>
                 </form>
+              </Show>
+
+              {/* Google discovery: search, price every result, tick the ones
+                  worth tracking. Your own store is filtered out server-side. */}
+              <Show when={showFind()}>
+                <div class="discover">
+                  <form
+                    class="discover-head"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      findCompetitors(query());
+                    }}
+                  >
+                    <input
+                      type="text"
+                      aria-label="Search terms"
+                      value={query()}
+                      placeholder="What a shopper would type"
+                      onInput={(e) => setQuery(e.currentTarget.value)}
+                      disabled={searching()}
+                    />
+                    <button type="submit" class="btn-mini" disabled={searching()}>
+                      {searching() ? "Searching…" : "Search again"}
+                    </button>
+                  </form>
+
+                  <Show when={searching()}>
+                    <div class="discover-status">
+                      Searching Google and reading each shop's price…
+                    </div>
+                  </Show>
+                  <Show when={findError()}>
+                    <div class="discover-status"><div class="note err">{findError()}</div></div>
+                  </Show>
+
+                  <Show when={!searching() && found()}>
+                    {(res) => (
+                      <>
+                        <Show
+                          when={res().candidates.length > 0}
+                          fallback={
+                            <div class="discover-status">
+                              No shops found for this search. Try different words.
+                            </div>
+                          }
+                        >
+                          <div class="discover-list">
+                            <For each={res().candidates}>
+                              {(cand) => (
+                                <label
+                                  class="discover-row"
+                                  classList={{
+                                    on: picked().includes(cand.url),
+                                    off: cand.already_tracked,
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={picked().includes(cand.url)}
+                                    disabled={cand.already_tracked}
+                                    onChange={() => togglePick(cand.url)}
+                                  />
+                                  <Favicon src={cand.favicon_url} name={cand.host} />
+                                  <span class="discover-text">
+                                    <span class="discover-title">{cand.title}</span>
+                                    <span class="discover-sub">
+                                      <a
+                                        class="ext-link"
+                                        href={cand.url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        {cand.host} ↗
+                                      </a>
+                                      <Show when={cand.error}>{" · "}{cand.error}</Show>
+                                    </span>
+                                  </span>
+                                  <span class="discover-price">
+                                    <Show when={cand.price} fallback={<span class="muted">—</span>}>
+                                      {money(cand.price)}
+                                    </Show>
+                                  </span>
+                                  <span class="discover-verdict">
+                                    <Show when={cand.already_tracked}>
+                                      <span class="badge neutral">already tracked</span>
+                                    </Show>
+                                    <Show when={!cand.already_tracked && cand.match_status === "verified"}>
+                                      <span class="badge good" title="Same product confirmed via the seller's SKU/GTIN">
+                                        ✓ verified
+                                      </span>
+                                    </Show>
+                                    <Show when={!cand.already_tracked && cand.match_status === "likely"}>
+                                      <span class="badge neutral">likely match</span>
+                                    </Show>
+                                    <Show when={!cand.already_tracked && cand.match_status === "review"}>
+                                      <span class="badge warn" title="The listing title doesn't look like this product">
+                                        <span class="dot" />check match
+                                      </span>
+                                    </Show>
+                                    <Show when={!cand.already_tracked && cand.price == null}>
+                                      <span class="badge bad"><span class="dot" />no price</span>
+                                    </Show>
+                                  </span>
+                                </label>
+                              )}
+                            </For>
+                          </div>
+                          <div class="discover-foot">
+                            <button
+                              class="btn-primary"
+                              disabled={picked().length === 0 || addingFound()}
+                              onClick={addPicked}
+                            >
+                              {addingFound()
+                                ? "Adding…"
+                                : `Track ${picked().length} competitor${picked().length === 1 ? "" : "s"}`}
+                            </button>
+                            <span class="hint">
+                              Top {res().candidates.length} shops for your region, your own
+                              store excluded. Unticked results are discarded.
+                            </span>
+                          </div>
+                        </Show>
+                      </>
+                    )}
+                  </Show>
+                </div>
               </Show>
               <div class="table-scroll">
                 <table>

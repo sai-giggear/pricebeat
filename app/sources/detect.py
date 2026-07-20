@@ -32,6 +32,12 @@ def origin_of(url: str) -> str:
     return f"{p.scheme}://{p.netloc}"
 
 
+def host_of(url: str) -> str:
+    """Bare hostname for matching URLs to competitors ("www." ignored)."""
+    h = urlparse(url or "").netloc.lower()
+    return h[4:] if h.startswith("www.") else h
+
+
 def resolve_favicon(html: str, origin: str) -> str:
     tree = HTMLParser(html)
     for link in tree.css("link"):

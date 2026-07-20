@@ -244,7 +244,9 @@ def test_mapping_create_auto_adds_unknown_competitor(tmp_path, monkeypatch):
         tracked_mapping_ids.extend(kwargs.get("mapping_ids") or [])
         return RunSummary(0, 0, 0)
 
-    monkeypatch.setattr("app.routes.mappings.fetch_html", fake_fetch_html)
+    # The URL -> competitor inference lives in routes.shared (the discovery
+    # route adds listings through the same helper), so patch it there.
+    monkeypatch.setattr("app.routes.shared.fetch_html", fake_fetch_html)
     monkeypatch.setattr("app.routes.mappings.run_tracking", fake_run_tracking)
 
     r = c.post("/api/mappings", json={"product_id": pid,
@@ -375,6 +377,112 @@ def test_sync_without_connected_store_is_a_clean_400(tmp_path, monkeypatch):
     r = c.post("/api/sync")
     assert r.status_code == 400
     assert "Connect your store" in r.json()["detail"]
+
+
+def _stub_discovery(monkeypatch, hits, price="18.00"):
+    """Google's answer + what each listing prices at, without the network."""
+    from app.sources.base import PriceResult, PriceStatus
+    from app.sources.search import SearchHit
+
+    async def fake_search(query, limit=20):
+        return [SearchHit(u, t) for u, t in hits]
+
+    async def fake_probe(url, client):
+        return ({"favicon_url": None},
+                PriceResult(Decimal(price), "AUD", True,
+                            datetime.now(timezone.utc), PriceStatus.OK,
+                            title="Widget", sku="W1"))
+
+    monkeypatch.setattr("app.discovery.google_search", fake_search)
+    monkeypatch.setattr("app.discovery._probe", fake_probe)
+
+
+def test_discover_returns_priced_candidates_without_the_store_itself(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    with db.get_session() as s:
+        s.add(AppSettings(key="woo_base_url", value="https://mystore.example"))
+        s.commit()
+    _stub_discovery(monkeypatch, [("https://mystore.example/widget", "Ours"),
+                                  ("https://rival.example/widget", "Rival")])
+    body = c.post(f"/api/products/{_pid()}/discover", json={}).json()
+    assert body["query"] == "Widget"  # built from the product name
+    assert [x["host"] for x in body["candidates"]] == ["rival.example"]
+    cand = body["candidates"][0]
+    assert cand["price"] == "18.00" and cand["match_status"] == "verified"
+    assert cand["suggested"] is True and cand["already_tracked"] is False
+
+
+def test_discover_accepts_an_edited_query(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    seen = []
+
+    async def fake_search(query, limit=20):
+        seen.append(query)
+        return []
+    monkeypatch.setattr("app.discovery.google_search", fake_search)
+    r = c.post(f"/api/products/{_pid()}/discover", json={"query": "acme widget 3000"})
+    assert r.status_code == 200 and seen == ["acme widget 3000"]
+    assert r.json()["candidates"] == []
+
+
+def test_discover_surfaces_a_google_block_as_a_message(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+
+    async def blocked(query, limit=20):
+        from app.sources.search import SearchBlocked
+        raise SearchBlocked("Google blocked this search")
+    monkeypatch.setattr("app.discovery.google_search", blocked)
+    r = c.post(f"/api/products/{_pid()}/discover", json={})
+    assert r.status_code == 502 and "blocked" in r.json()["detail"]
+    assert c.post("/api/products/9999/discover", json={}).status_code == 404
+
+
+def test_discover_add_tracks_the_picked_listings_in_one_run(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    pid = _pid()
+
+    async def fake_fetch_html(url):
+        return '<html><body class="woocommerce"></body></html>'
+    runs = []
+
+    async def fake_run_tracking(session, *args, **kwargs):
+        from app.engine import RunSummary
+        runs.append(kwargs.get("mapping_ids"))
+        return RunSummary(0, 0, 0)
+    monkeypatch.setattr("app.routes.shared.fetch_html", fake_fetch_html)
+    monkeypatch.setattr("app.routes.discovery.run_tracking", fake_run_tracking)
+
+    body = c.post(f"/api/products/{pid}/discover/add", json={"urls": [
+        "https://rival.example/widget", "https://shop2.example/widget"]}).json()
+    assert body["added"] == 2 and body["skipped"] == []
+    with db.get_session() as s:
+        assert len(s.exec(select(Mapping)).all()) == 2
+        # Each new host became a competitor of its own.
+        assert {x.name for x in s.exec(select(Competitor)).all()} == \
+            {"rival.example", "shop2.example"}
+    # One tracking run for the whole batch, not one per listing.
+    assert runs == [body["mapping_ids"]]
+
+
+def test_discover_add_skips_duplicates_without_losing_the_rest(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    pid = _pid()
+
+    async def fake_fetch_html(url):
+        return "<html></html>"
+
+    async def fake_run_tracking(session, *args, **kwargs):
+        from app.engine import RunSummary
+        return RunSummary(0, 0, 0)
+    monkeypatch.setattr("app.routes.shared.fetch_html", fake_fetch_html)
+    monkeypatch.setattr("app.routes.discovery.run_tracking", fake_run_tracking)
+
+    urls = ["https://rival.example/widget"]
+    assert c.post(f"/api/products/{pid}/discover/add", json={"urls": urls}).json()["added"] == 1
+    body = c.post(f"/api/products/{pid}/discover/add",
+                  json={"urls": urls + ["https://shop2.example/widget"]}).json()
+    assert body["added"] == 1 and len(body["skipped"]) == 1
+    assert "already tracked" in body["skipped"][0]["reason"]
 
 
 def test_spa_catch_all(tmp_path, monkeypatch):

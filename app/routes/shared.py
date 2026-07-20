@@ -1,25 +1,20 @@
 """Helpers shared by more than one router."""
 from __future__ import annotations
+import json
 from collections import defaultdict
 from decimal import Decimal
-from urllib.parse import urlparse
 import httpx2
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlmodel import select
 from app.analysis import CompetitorPrice
-from app.models import AppSettings, Competitor, Mapping, PriceSnapshot
+from app.models import AppSettings, Competitor, Mapping, PriceSnapshot, Product
 from app.sources.base import HEADERS
+from app.sources.detect import clean_url, detect_source, host_of  # noqa: F401
 
 
 def money(v: Decimal | None) -> str | None:
     return str(v) if v is not None else None
-
-
-def host_of(url: str) -> str:
-    """Bare hostname for matching pasted URLs to competitors ("www." ignored)."""
-    h = urlparse(url or "").netloc.lower()
-    return h[4:] if h.startswith("www.") else h
 
 
 def delete_mapping(s, mapping) -> None:
@@ -72,6 +67,46 @@ def set_setting(session, key, value):
     else:
         row = AppSettings(key=key, value=value)
     session.add(row)
+
+
+async def create_mapping(session, product_id: int, identifier: str,
+                         competitor_id: int | None = None) -> int:
+    """Track a competitor's listing of one of our products, and return the new
+    mapping's id. Committed but *not* fetched — the caller decides when to
+    price it, so adding ten listings at once is one tracking run, not ten.
+
+    With no ``competitor_id`` the competitor is inferred from the URL's host,
+    and auto-added (with its price-extraction method detected) when the host is
+    new. Anything the user should see is raised as an HTTPException.
+    """
+    identifier = clean_url(identifier)
+    if session.get(Product, product_id) is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    if session.exec(select(Mapping).where(Mapping.product_id == product_id,
+                                          Mapping.identifier == identifier)).first():
+        raise HTTPException(status_code=409,
+                            detail="This URL is already tracked for this product")
+    if competitor_id is not None:
+        comp = session.get(Competitor, competitor_id)
+        if comp is None:
+            raise HTTPException(status_code=404, detail="Competitor not found")
+    else:
+        host = host_of(identifier)
+        if not host:
+            raise HTTPException(status_code=400,
+                detail="Enter a full competitor product URL (including https://)")
+        comp = next((c for c in session.exec(select(Competitor)).all()
+                     if c.site_url and host_of(c.site_url) == host), None)
+        if comp is None:
+            cfg = await detect_source(identifier, fetch_html)
+            config = json.dumps({"source": cfg["source"],
+                                 "price_selector": cfg["price_selector"]})
+            comp = Competitor(name=host, config=config, site_url=cfg["site_url"],
+                              favicon_url=cfg["favicon_url"])
+            session.add(comp); session.commit(); session.refresh(comp)
+    m = Mapping(product_id=product_id, competitor_id=comp.id, identifier=identifier)
+    session.add(m); session.commit(); session.refresh(m)
+    return m.id
 
 
 async def fetch_html(url: str) -> str:

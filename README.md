@@ -7,6 +7,28 @@ WooCommerce competitor price tracker. Python (FastAPI) backend + SolidJS SPA fro
 - **Frontend** (`frontend/`) — SolidJS single-page app built with Bun + Vite,
   talking to the API under `/api`.
 
+## Finding competitors
+
+A product page's **Find on Google** button searches the web for shops selling
+that product, reads each one's price, and grades every listing against your
+product (SKU/GTIN first, title second — see `app/matcher.py`). You get a review
+list with prices already filled in; ticking rows and confirming is what turns
+them into tracked competitors. Your own store is excluded automatically, as are
+social, video and review sites.
+
+It needs no API key. Two things follow from that, both in `app/sources/search.py`:
+
+- google.com/search renders results with JavaScript and returns an empty shell
+  to any plain HTTP client, so the query goes through Startpage, which runs it
+  against Google and returns server-rendered HTML. The results are Google's.
+- Startpage geolocates by the requesting IP and ignores region parameters, so
+  results are for wherever the app runs — there's no country setting to change.
+  Heavy use eventually meets a CAPTCHA, which surfaces in the UI as a blocked
+  search rather than an empty result list.
+
+Swapping in a keyed SERP API (Serper.dev, SerpAPI) later means rewriting
+`google_search()` in that one module; nothing else talks to the search engine.
+
 ## First-time setup
 
 ```bash

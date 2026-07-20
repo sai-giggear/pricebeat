@@ -78,6 +78,26 @@ export interface DetectResult {
   sample_price: string | null;
 }
 
+/** One Google result, already priced and graded against your product. */
+export interface DiscoverCandidate {
+  url: string;
+  title: string;
+  host: string;
+  favicon_url: string | null;
+  price: string | null;
+  currency: string | null;
+  in_stock: boolean | null;
+  match_status: "verified" | "likely" | "review" | null;
+  already_tracked: boolean;
+  suggested: boolean; // pre-ticked: has a price and matches your product
+  error: string | null;
+}
+
+export interface DiscoverResult {
+  query: string;
+  candidates: DiscoverCandidate[];
+}
+
 export interface TrackProduct {
   id: number;
   name: string;
@@ -174,6 +194,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ product_id }),
     }).then(handle),
+  /** Search the product and price every shop found (seconds, not instant). */
+  discover: (id: number | string, query?: string): Promise<DiscoverResult> =>
+    post(`/api/products/${id}/discover`, { query: query ?? "" }),
+  discoverAdd: (
+    id: number | string,
+    urls: string[],
+  ): Promise<{ added: number; mapping_ids: number[]; skipped: { url: string; reason: string }[] }> =>
+    post(`/api/products/${id}/discover/add`, { urls }),
   settings: (): Promise<Settings> => get("/api/settings"),
   saveSettings: (body: { woo_base_url: string; woo_key: string; woo_secret: string }) =>
     post("/api/settings", body),
