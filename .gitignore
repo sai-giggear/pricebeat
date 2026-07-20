@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+
+# Local DB & secrets
+*.db
+*.sqlite3
+.env
+
+# Editor / tool caches
+.vscode/
+.pytest_cache/
+
+# Frontend (Bun / Vite / SolidJS)
+frontend/node_modules/
+frontend/dist/
+
+# Desktop build output (PyInstaller). assets/ is source and stays tracked.
+build/
+dist/
