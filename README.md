@@ -1,142 +1,118 @@
 # PriceBeat
 
-WooCommerce competitor price tracker. Python (FastAPI) backend + SolidJS SPA frontend.
+WooCommerce competitor price tracker. It syncs your catalogue, reads rival
+stores' prices on a schedule, and shows where each product stands: lowest,
+beaten (and by how much), or no data yet.
 
-- **Backend** (`app/`) — JSON API, price scraping, WooCommerce sync,
-  price analysis, scheduler. SQLite storage.
-- **Frontend** (`frontend/`) — SolidJS single-page app built with Bun + Vite,
-  talking to the API under `/api`.
+Version 2 is a rewrite in TypeScript on Bun. One language and one toolchain
+for the server, the web UI and the desktop app.
 
-## Finding competitors
+| Part | What it is |
+|---|---|
+| `server/` | HTTP API on `Bun.serve`, SQLite through `bun:sqlite`, scraping with Bun's built-in `HTMLRewriter` |
+| `web/` | SolidJS single-page app, built with Vite |
+| `desktop.ts` | The same server on a random localhost port, shown in a native WebView2 window (`@webviewjs/webview`) |
+| `test/` | `bun test` suites |
 
-A product page's **Find on Google** button searches the web for shops selling
-that product, reads each one's price, and grades every listing against your
-product (SKU/GTIN first, title second — see `app/matcher.py`). You get a review
-list with prices already filled in; ticking rows and confirming is what turns
-them into tracked competitors. Your own store is excluded automatically, as are
-social, video and review sites.
+## Setup
 
-It needs no API key. Two things follow from that, both in `app/sources/search.py`:
-
-- google.com/search renders results with JavaScript and returns an empty shell
-  to any plain HTTP client, so the query goes through Startpage, which runs it
-  against Google and returns server-rendered HTML. The results are Google's.
-- Startpage geolocates by the requesting IP and ignores region parameters, so
-  results are for wherever the app runs — there's no country setting to change.
-  Heavy use eventually meets a CAPTCHA, which surfaces in the UI as a blocked
-  search rather than an empty result list.
-
-Swapping in a keyed SERP API (Serper.dev, SerpAPI) later means rewriting
-`google_search()` in that one module; nothing else talks to the search engine.
-
-## First-time setup
+Needs [Bun](https://bun.sh) 1.4 or later.
 
 ```bash
-# Backend deps (into the venv)
-.venv/Scripts/python -m pip install -e ".[dev]"
-
-# Frontend deps
-cd frontend && bun install
+bun install
 ```
 
 ## Running
 
-### Development (recommended)
+| Command | What it does |
+|---|---|
+| `bun run dev` | API with auto-restart on :8000, plus Vite with hot reload. Open the URL Vite prints. |
+| `bun run build && bun run start` | Built UI and API from one process on <http://127.0.0.1:8000> |
+| `bun run desktop` | Desktop window from a checkout (run `bun run build` first) |
+| `bun run package` | Portable app: `dist/PriceBeat/PriceBeat.exe` plus `dist/PriceBeat-<version>.zip` |
+| `bun test` | Tests |
+| `bun run typecheck` | TypeScript check across server, web and tests |
 
-```powershell
-.\dev.ps1
-```
+The packaged app is unsigned, so Windows SmartScreen warns on first run.
+WebView2 ships with Windows 11.
 
-Starts the API (uvicorn, auto-reload) and the Vite dev server together.
-Open <http://localhost:5173> — edits to the SolidJS app hot-reload instantly.
+## Your data
 
-### Single process (no hot reload)
+The database lives at `%LOCALAPPDATA%\PriceBeat\price_tracker.db`, the same
+file version 1 used. Version 2 keeps the exact same tables, so it opens a 1.x
+database as-is: products, competitors, tracked listings, history and store
+keys all carry over. Set `DATABASE_PATH` to use a different file.
 
-```bash
-cd frontend && bun run build && cd ..
-.venv/Scripts/python -m uvicorn app.main:app
-```
+Store URL and WooCommerce API keys are entered in **Settings**. The keys stay
+in the local database and the UI never shows them again once saved.
 
-Serves the built UI + API from one process on <http://localhost:8000>.
+## How tracking works
 
-### Desktop app
+- **Reading a price.** Shopify stores are read from their `/products/<handle>.js`
+  JSON, which survives theme changes. Everything else is read from the page's
+  schema.org JSON-LD, with a CSS selector as fallback. The method is detected
+  when a store is first added (`server/scrape.ts`).
+- **Match check.** Each listing is graded against your product: the seller's
+  GTIN/MPN/SKU equal to your SKU is "verified", a close title is "likely", and
+  anything else is flagged "check match" in the UI (`server/pricing.ts`).
+- **Schedule.** An hourly sweep fetches only the listings that are due. Each
+  listing's interval halves (down to 6h) when its price moves and grows 1.5x
+  (up to 72h) while it holds. The desktop app also sweeps on launch, since it
+  only runs while its window is open.
+- **Politeness.** Different sites are fetched in parallel (8 at a time), but
+  requests to the same site go one at a time with a 1 second gap.
+- **History.** Snapshots older than 180 days are pruned. The newest one per
+  listing is always kept.
 
-```powershell
-.\build.ps1
-```
+## Finding competitors
 
-Builds the frontend, packages everything with PyInstaller, and produces
-`dist\PriceBeat\` (double-click `PriceBeat.exe`) plus a zip of the same folder.
-Needs the desktop extra once: `.venv/Scripts/python -m pip install -e ".[desktop]"`.
+**Find on Google** on a product page searches for shops selling it, reads each
+one's price, and grades every listing. You review a list with prices filled
+in; only the ones you tick become tracked. Your own store, social sites and
+review sites are left out. Marketplaces stay in, since their sellers are who
+you price against.
 
-The packaged app is the same FastAPI service in a background thread, shown in a
-native window (WebView2, which ships with Windows 11). It binds a random
-localhost port, so it never collides with a dev server.
+No API key is needed. Google returns an empty JavaScript shell to plain HTTP
+clients, so the query goes through Startpage, which runs it against Google and
+returns plain HTML. Two consequences:
 
-To run it unpackaged: `.venv/Scripts/python -m app.desktop`.
+- Results follow the region of the machine running PriceBeat. There is no
+  region setting.
+- Heavy use eventually meets a CAPTCHA. The UI then says the search was
+  blocked, rather than showing an empty list.
 
-It's a launch-and-check app — there's no background process while it's closed,
-so on startup it sweeps whatever competitor prices came due since last time
-(`CATCH_UP_ON_LAUNCH=1`, which `app/desktop.py` sets for you). Progress shows in
-the UI like any other tracking run.
-
-The build is unsigned, so Windows SmartScreen warns on first run.
-
-### Update notifications
-
-Nothing self-updates — the app is a folder you unpack, so the swap is manual.
-What it does do is *notice*: on load the UI calls `/api/version`, which asks
-GitHub for the latest release of `sai-giggear/pricebeat` and compares the tag
-against `app/__init__.py`. If a newer one exists, a small badge appears in the
-top bar linking to the download. Otherwise nothing is shown.
-
-The check is best-effort by design (see `app/updates.py`): offline, rate-limited,
-404 before the first release is published, and a malformed tag all resolve to
-"no update", never to an error. A failed update check must not look like a
-problem with price tracking. Answers are cached for 6 hours (5 minutes after a
-failure), so repeated launches stay well under GitHub's 60-requests/hour limit
-for unauthenticated callers.
-
-## Releasing
-
-1. Bump `__version__` in `app/__init__.py` — the only place the version lives.
-   `pyproject.toml` reads it, `build.ps1` names the zip from it, and the update
-   check compares against it.
-2. `.\build.ps1` → `dist\PriceBeat-<version>.zip`.
-3. Publish it, tagged with the same version:
-
-   ```powershell
-   gh release create v0.2.0 dist\PriceBeat-0.2.0.zip --notes "What changed"
-   ```
-
-The tag drives everything: existing installs compare it against their own
-version, and the attached `.zip` is what the badge links to. A release with no
-zip attached still works — the badge falls back to the release page.
-
-The app icon is `assets/pricebeat.ico`, built from `assets/pricebeat.svg` — the
-same swing-tag mark as the favicon in `frontend/index.html`. It's committed as a
-source asset, so no SVG rasterizer is needed to build. To change the mark, edit
-the SVG, render it to PNGs, and repack them into the `.ico` (Pillow's
-`Image.save(..., format="ICO", sizes=[...])` does the packing).
+Swapping in a keyed search API later means rewriting `googleSearch()` in
+`server/discovery.ts`. Nothing else talks to the search engine.
 
 ## Configuration
 
-Copy `.env.example` to `.env` to override defaults (database URL, scrape delay).
-WooCommerce store URL and API keys are set in the app's **Settings** page.
+Copy `.env.example` to `.env` to change defaults (database path, scrape delay,
+parallelism, retention, port). Bun reads `.env` from the working directory;
+plain environment variables work too.
 
-The background scheduler runs an hourly sweep of due mappings. Set
-`DISABLE_SCHEDULER=1` to turn it off (useful in dev).
+## Update notifications
 
-### Where data lives
+Nothing self-updates. On load the UI asks `/api/version`, which checks the
+latest GitHub release of `sai-giggear/pricebeat` against `version` in
+`package.json`. If a newer one exists, a badge in the top bar links to the
+download. Offline, rate-limited, or no release published yet all count as
+"no update", never as an error. Answers are cached for 6 hours (5 minutes
+after a failure).
 
-The database and the packaged app's `.env` default to `%LOCALAPPDATA%\PriceBeat\`
-(`~/.local/share/PriceBeat` elsewhere) — an installed app can't write next to its
-executable, and its working directory is wherever the shortcut points. Run from a
-checkout, `.env` is still read from the repo root. `DATABASE_URL` overrides the
-location either way.
+## Releasing
 
-## Tests
+1. Bump `version` in `package.json`. It's the only copy: the server, the zip
+   name and the update check all read it.
+2. `bun run package`
+3. Publish with the same tag:
 
-```bash
-.venv/Scripts/python -m pytest
-```
+   ```powershell
+   gh release create v2.0.0 dist\PriceBeat-2.0.0.zip --notes "What changed"
+   ```
+
+## Brand assets
+
+`assets/pricebeat.svg` is the mark: a white shop awning on an indigo tile. The
+favicon is the same file at `web/public/icon.svg`. `assets/pricebeat.ico` (exe
+icon) and `assets/icon.png` (window icon) are rendered from it and committed,
+so building needs no image tools.

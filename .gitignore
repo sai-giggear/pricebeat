@@ -1,23 +1,16 @@
-# Python
-__pycache__/
-*.pyc
-*.egg-info/
-.venv/
-venv/
+node_modules/
+web/dist/
+dist/
 
-# Local DB & secrets
+# Local data & secrets
 *.db
-*.sqlite3
+*.db-shm
+*.db-wal
 .env
 
-# Editor / tool caches
+# Editor
 .vscode/
-.pytest_cache/
 
-# Frontend (Bun / Vite / SolidJS)
-frontend/node_modules/
-frontend/dist/
-
-# Desktop build output (PyInstaller). assets/ is source and stays tracked.
-build/
-dist/
+# Old Python toolchain (v1), safe to delete
+.venv/
+*.egg-info/
