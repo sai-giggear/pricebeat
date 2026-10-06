@@ -178,6 +178,10 @@ select.input { padding-right: 28px; cursor: pointer; }
   padding: 14px 18px; border-bottom: 1px solid var(--border);
 }
 .card-head .spacer { flex: 1; }
+.card-foot { padding: 14px 18px; border-top: 1px solid var(--border); }
+.finder { max-height: 460px; overflow-y: auto; }
+.finder input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.finder td:first-child, .finder th:first-child { width: 1%; padding-right: 0; }
 .count { color: var(--muted); font-weight: 500; }
 
 .badge {
@@ -188,7 +192,6 @@ select.input { padding-right: 28px; cursor: pointer; }
 .badge.good { background: var(--good-weak); color: var(--good-ink); }
 .badge.bad { background: var(--bad-weak); color: var(--bad-ink); }
 .badge.warn { background: var(--warn-weak); color: var(--warn); }
-.badge.accent { background: var(--accent-weak); color: var(--accent-ink); }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--border-strong); }
 .dot.good { background: var(--good); }
 .dot.bad { background: var(--bad); }
@@ -227,18 +230,24 @@ td.actions { text-align: right; white-space: nowrap; }
 .cell-title { display: flex; align-items: center; gap: 9px; color: var(--ink); font-weight: 600; }
 .cell-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 360px; }
+/* A column that takes whatever width is left and truncates inside it, so the
+   other columns never get pushed off the card. */
+td.fill { width: 100%; max-width: 0; }
+td.fill .truncate { max-width: none; }
+td.num, td.checked { white-space: nowrap; }
+td.checked .error { white-space: normal; width: 190px; color: var(--bad-ink); }
 .ext { color: var(--muted); text-decoration: none; }
 .ext:hover { color: var(--accent-ink); text-decoration: underline; }
 
 /* ---- Pages ----------------------------------------------------------------- */
 .page { flex: 1; overflow: auto; }
-.page-inner { max-width: 1120px; margin: 0 auto; padding: 28px 24px 60px; }
+.page-inner { padding: 28px 30px 60px; }
 .page-head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
 .page-head .sub { color: var(--muted); margin-top: 3px; }
 .page-head .spacer { flex: 1; }
 
 /* ---- Split view: product list + detail ------------------------------------- */
-.split { flex: 1; display: grid; grid-template-columns: minmax(330px, 400px) 1fr; min-height: 0; }
+.split { flex: 1; display: grid; grid-template-columns: minmax(400px, 24%) 1fr; min-height: 0; }
 .list-pane {
   display: flex; flex-direction: column; min-height: 0;
   border-right: 1px solid var(--border); background: var(--surface);
@@ -258,13 +267,19 @@ td.actions { text-align: right; white-space: nowrap; }
 .chip:hover { background: var(--surface-2); }
 .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
 .chip[aria-pressed="true"] b { color: var(--bg); }
-.chip[aria-pressed="true"] .dot.good { background: var(--good); }
 
 .list-filters { display: flex; gap: 6px; align-items: center; }
-.list-filters select.input { height: 30px; font-size: 12.5px; border-radius: 999px; padding: 0 22px 0 10px; flex: 1 1 0; min-width: 0; text-overflow: ellipsis; }
-.list-filters select.input:last-child { flex: 0 0 auto; width: auto; }
+.list-filters:empty { display: none; }
+.list-filters select.input, .list-foot select.input {
+  height: 30px; font-size: 12.5px; border-radius: 999px; padding: 0 22px 0 10px;
+  flex: 1 1 0; min-width: 0; text-overflow: ellipsis;
+}
+.list-foot select.input { flex: none; width: auto; height: 28px; font-size: 12px; }
 
 .list { flex: 1; overflow-y: auto; list-style: none; margin: 0; padding: 6px; }
+/* The whole catalogue can be ~1,500 rows: skip layout and paint for rows
+   scrolled out of view. */
+.list > li { content-visibility: auto; contain-intrinsic-size: auto 62px; }
 .item {
   display: grid; grid-template-columns: 10px 1fr auto; gap: 4px 10px; align-items: center;
   padding: 10px 12px; border-radius: 11px; text-decoration: none; color: inherit;
@@ -284,11 +299,12 @@ td.actions { text-align: right; white-space: nowrap; }
 .list-foot .spacer { flex: 1; }
 
 .detail-pane { overflow-y: auto; min-width: 0; }
-.detail { padding: 26px 30px 60px; max-width: 1080px; display: grid; gap: 18px; }
+/* minmax(0, …): a wide rivals table scrolls inside its card instead of
+   stretching every card past the pane. */
+.detail { padding: 26px 30px 60px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
 .detail-head { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
 .detail-head > div:first-child { flex: 1 1 320px; }
 .eyebrow { font-size: 12.5px; color: var(--muted); margin-bottom: 4px; display: flex; gap: 8px; flex-wrap: wrap; }
-.back { display: none; }
 
 /* Summary tiles */
 .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
@@ -303,7 +319,7 @@ td.actions { text-align: right; white-space: nowrap; }
 .tile.accent .tile-value { color: var(--accent-ink); }
 
 /* Overview (no product picked) */
-.overview { padding: 40px 30px; max-width: 760px; }
+.overview { padding: 30px 30px 60px; }
 .overview h1 { font-size: 26px; }
 .overview .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 22px 0; }
 .tile.button { cursor: pointer; text-align: left; font: inherit; color: inherit; }
@@ -320,7 +336,7 @@ td.actions { text-align: right; white-space: nowrap; }
 .chart .marker { stroke: var(--surface); stroke-width: 2; }
 .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--text); padding: 0 18px 12px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
-.key { width: 16px; height: 0; border-top: 2px solid; border-radius: 2px; }
+.key { width: 16px; height: 0; border-top: 2px solid; border-radius: 2px; flex: none; }
 .key.dash { border-top-style: dashed; border-color: var(--ink); }
 .tooltip {
   position: absolute; pointer-events: none; z-index: 5; min-width: 170px;
@@ -362,43 +378,107 @@ td.actions { text-align: right; white-space: nowrap; }
 .picker-opt span:first-child { flex: 1; color: var(--ink); }
 
 /* ---- Settings ---------------------------------------------------------------- */
-.steps { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
-.step-num {
-  display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%;
-  background: var(--accent-weak); color: var(--accent-ink); font-weight: 700; font-size: 13px;
+/* Fills the window: store strip on top, the tracking card takes the rest and
+   scrolls inside itself (filters and table separately). */
+.settings-page {
+  flex: 1; min-height: 0; overflow: auto; padding: 24px 30px 24px;
+  display: flex; flex-direction: column; gap: 14px;
 }
-.step-num.done { background: var(--good-weak); color: var(--good-ink); }
-.step-wide { grid-column: 1 / -1; }
-.checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 6px; max-height: 300px; overflow-y: auto; padding: 2px; }
-.check {
-  display: flex; align-items: center; gap: 9px; padding: 8px 11px; border-radius: 10px;
-  border: 1px solid var(--border); cursor: pointer; font-size: 13px; background: var(--surface);
+.settings-page .page-head { margin-bottom: 0; }
+.settings-page .spacer { flex: 1; }
+
+.store { flex: none; }
+.store-strip { display: flex; align-items: center; gap: 12px; padding: 12px 18px; }
+.store-strip .dot { width: 10px; height: 10px; }
+.store-name { display: grid; gap: 1px; min-width: 0; }
+.store-name b { color: var(--ink); font-size: 14.5px; }
+.store-form { padding: 16px 18px 18px; border-top: 1px solid var(--border); max-width: 720px; }
+.store-note { padding: 0 18px 14px; }
+
+.track { flex: 1; min-height: 540px; display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
+.track-main { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 0; }
+
+.track-filters {
+  overflow-y: auto; overflow-x: hidden; padding: 16px; display: grid; gap: 20px; align-content: start;
+  grid-template-columns: minmax(0, 1fr);
+  border-right: 1px solid var(--border); background: var(--surface-2);
 }
-.check:hover { border-color: var(--border-strong); }
-.check.on { border-color: var(--accent); background: var(--accent-weak); }
-.check input { accent-color: var(--accent); margin: 0; }
-.check .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
-.check .n { color: var(--muted); font-size: 12px; }
-.check .s { display: block; font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
-.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.quick-pick {
+  display: grid; gap: 8px; padding: 12px; border-radius: 12px;
+  background: var(--surface); border: 1px solid var(--border);
+}
+.quick-pick h3 { color: var(--accent-ink); }
+.quick-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.quick-row select.input { height: 32px; font-size: 13px; padding: 0 22px 0 9px; }
+
+.facet { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
+.facet-head { display: flex; align-items: baseline; gap: 8px; }
+.facet-search { height: 30px; font-size: 12.5px; }
+.facet-list { display: grid; gap: 1px; grid-template-columns: minmax(0, 1fr); }
+.facet-opt {
+  display: flex; align-items: center; gap: 9px; padding: 5px 8px; border-radius: 8px;
+  font-size: 13px; cursor: pointer;
+}
+.facet-opt:hover { background: var(--surface); }
+.facet-opt.on { background: var(--accent-weak); }
+.facet-opt input { accent-color: var(--accent); margin: 0; }
+.facet-opt .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.facet-opt .n { color: var(--muted); font-size: 12px; }
+
+.track-table { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.track-toolbar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+}
+.track-toolbar .search { width: 280px; }
+.track-banner {
+  padding: 9px 16px; font-size: 13px; color: var(--accent-ink);
+  background: var(--accent-weak); border-bottom: 1px solid var(--border);
+}
+.track-scroll { flex: 1; overflow-y: auto; min-height: 0; }
+.track-grid th { position: sticky; top: 0; z-index: 1; background: var(--surface); }
+.track-grid td { padding: 7px 14px; font-size: 13px; }
+.track-grid td.muted, .track-grid td.sku { white-space: nowrap; }
+.track-grid td.sku { font-size: 12px; }
+.track-grid .name { color: var(--ink); }
+.track-grid tbody tr { cursor: pointer; }
+.track-grid tbody tr:hover { background: var(--surface-2); }
+.track-grid tbody tr.on { background: var(--accent-weak); }
+.track-grid tbody tr.on .name { font-weight: 600; }
+.track-grid tbody tr.stopped .name { color: var(--muted); text-decoration: line-through; }
+.name-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.name-cell .truncate { min-width: 0; max-width: none; }
+.name-cell .badge { flex: none; font-size: 11px; padding: 1px 7px; }
+.track-grid .tick { width: 1%; padding-right: 0; }
+.track-grid .tick input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; display: block; }
+.track-grid td.empty { padding: 40px; text-align: center; }
+.th-sort {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit;
+}
+.th-sort:hover { color: var(--ink); }
+.th-sort.on { color: var(--accent-ink); }
+.th-sort.on::after { content: " ↓"; }
+th:first-of-type + th .th-sort.on::after { content: " ↑"; }
+
+.savebar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 18px; border-top: 1px solid var(--border); background: var(--surface);
+}
+.savebar-note { font-size: 13px; }
+.savebar-note.ok { color: var(--good-ink); }
+.savebar-note.err { color: var(--bad-ink); }
 .link-btn { border: 0; background: none; color: var(--accent-ink); cursor: pointer; font-weight: 600; font-size: 12.5px; padding: 0; }
 
 /* ---- Competitors ------------------------------------------------------------- */
 .two { display: grid; grid-template-columns: 1fr 360px; gap: 18px; align-items: start; }
 .detected { padding: 12px 14px; border-radius: 10px; background: var(--surface-2); display: grid; gap: 6px; margin-bottom: 14px; }
 
-/* ---- Narrow screens ---------------------------------------------------------- */
+/* ---- Narrow window ------------------------------------------------------------
+   Desktop only, but the window can still be dragged small. Below this the list
+   and detail stay side by side; the page scrolls sideways instead of reflowing. */
+body { min-width: 880px; }
 @media (max-width: 980px) {
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .steps, .cols, .two { grid-template-columns: 1fr; }
-}
-@media (max-width: 820px) {
-  .top { gap: 10px; padding: 0 12px; }
-  .brand span:last-child { display: none; }
-  .split { grid-template-columns: 1fr; }
-  .split.has-detail .list-pane { display: none; }
-  .split:not(.has-detail) .detail-pane { display: none; }
-  .back { display: inline-flex; }
-  .detail { padding: 18px 16px 40px; }
-  .page-inner { padding: 20px 16px 40px; }
+  .two { grid-template-columns: 1fr; }
 }

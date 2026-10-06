@@ -183,14 +183,24 @@ export async function jsonldOffer(html: string): Promise<Partial<PriceResult> | 
 
 const UNAVAILABLE = new Set(["OutOfStock", "SoldOut", "Discontinued"]);
 
+const isBlock = (r: Response) => r.status === 403 || r.status === 429;
+
+/** GET a page. Bot walls are fickle: rubbermonkey.com.au has refused our bot UA
+ *  some weeks and a browser UA others, so a refusal gets one retry as the other. */
+async function getPage(url: string): Promise<Response> {
+  const resp = await get(url);
+  return isBlock(resp) ? get(url, BROWSER_HEADERS) : resp;
+}
+
 async function fetchAuto(url: string, selector: string): Promise<PriceResult> {
-  let resp = await get(url);
-  // Bot walls are fickle: rubbermonkey.com.au has refused our bot UA some weeks
-  // and a browser UA others. One retry as the other before giving up.
-  if (resp.status === 403 || resp.status === 429) resp = await get(url, BROWSER_HEADERS);
-  if (resp.status === 403 || resp.status === 429) return failed(`HTTP ${resp.status}`, "blocked");
+  const resp = await getPage(url);
+  if (isBlock(resp)) return failed(`HTTP ${resp.status}`, "blocked");
   if (!resp.ok) return failed(`HTTP ${resp.status}`);
-  const html = await resp.text();
+  return priceFromHtml(await resp.text(), selector);
+}
+
+/** Price from an already fetched page: JSON-LD first, then the CSS selector. */
+export async function priceFromHtml(html: string, selector: string): Promise<PriceResult> {
   const offer = await jsonldOffer(html);
   if (offer) {
     return { currency: "AUD", ...offer, price: offer.price!, status: "ok",
@@ -255,10 +265,10 @@ export type Detected = SourceConfig & { method: string; site_url: string; favico
 /** Fetch a page, turning problems into a readable message. */
 export async function fetchHtml(url: string): Promise<string> {
   let resp: Response;
-  try { resp = await get(url); } catch (err) {
+  try { resp = await getPage(url); } catch (err) {
     throw new Error(`Couldn't fetch ${url}: ${err instanceof Error ? err.message : err}`);
   }
-  if (resp.status === 403 || resp.status === 429) {
+  if (isBlock(resp)) {
     throw new Error(`Competitor page blocked our request (HTTP ${resp.status})`);
   }
   if (!resp.ok) throw new Error(`Couldn't fetch ${url}: HTTP ${resp.status}`);

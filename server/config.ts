@@ -25,7 +25,7 @@ const num = (name: string, fallback: number) => {
 export const settings = {
   // A plain file path. ":memory:" works for tests.
   databasePath: process.env.DATABASE_PATH || join(dataDir(), "price_tracker.db"),
-  // Delay between requests to the *same* competitor host. Hosts run in
+  // Minimum gap between request starts to the *same* competitor host. Hosts run in
   // parallel, so this doesn't throttle the whole run.
   scrapeDelayMs: num("SCRAPE_DELAY_SECONDS", 1) * 1000,
   maxConcurrentHosts: Math.max(1, num("MAX_CONCURRENT_HOSTS", 8)),

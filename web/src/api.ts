@@ -46,11 +46,11 @@ export interface Job {
   summary: RunSummary | null; error: string | null;
 }
 
-export interface TrackProduct { id: number; name: string; sku: string | null; brand: string | null; category: string | null }
+export interface TrackProduct { id: number; name: string; sku: string | null; brand: string | null; category: string | null; price: string | null }
 
 export interface Settings {
-  woo_base_url: string; woo_key_set: boolean; woo_secret_set: boolean;
-  track_brands: string[]; track_categories: string[]; track_products: number[];
+  woo_base_url: string; woo_key_set: boolean; woo_secret_set: boolean; own_stores: string;
+  track_brands: string[]; track_categories: string[]; track_products: number[]; track_excluded: number[]; last_synced: string | null;
   available_brands: string[]; available_categories: string[]; available_products: TrackProduct[];
 }
 
@@ -70,6 +70,7 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
 export const api = {
   products: () => call<ProductRow[]>("GET", "/api/products"),
   product: (id: number | string) => call<ProductDetail>("GET", `/api/products/${id}`),
+  stopTracking: (id: number) => call("POST", `/api/products/${id}/stop`),
   trackProduct: (id: number) => call<RunSummary>("POST", `/api/products/${id}/track`),
   trackMapping: (id: number) => call<RunSummary>("POST", `/api/mappings/${id}/track`),
   addMapping: (product_id: number, identifier: string) => call("POST", "/api/mappings", { product_id, identifier }),
@@ -79,6 +80,7 @@ export const api = {
     call<{ query: string; candidates: Candidate[] }>("POST", `/api/products/${id}/discover`, { query }),
   discoverAdd: (id: number, urls: string[]) =>
     call<{ added: number; skipped: { url: string; reason: string }[] }>("POST", `/api/products/${id}/discover/add`, { urls }),
+  searchProduct: (id: number) => call<{ url: string; title: string; host: string }[]>("POST", `/api/products/${id}/search`),
   competitors: () => call<Competitor[]>("GET", "/api/competitors"),
   detect: (url: string) => call<Detected>("POST", "/api/competitors/detect", { url }),
   addCompetitor: (url: string, name: string) => call("POST", "/api/competitors", { url, name }),
@@ -87,11 +89,12 @@ export const api = {
   deleteCompetitor: (id: number) => call("DELETE", `/api/competitors/${id}`),
   reset: () => call<{ competitors: number; mappings: number; snapshots: number }>("POST", "/api/reset"),
   settings: () => call<Settings>("GET", "/api/settings"),
-  saveConnection: (body: { woo_base_url: string; woo_key: string; woo_secret: string }) =>
+  saveConnection: (body: { woo_base_url: string; woo_key: string; woo_secret: string; own_stores: string }) =>
     call("POST", "/api/settings", body),
-  saveTracking: (body: { brands: string[]; categories: string[]; product_ids: number[] }) =>
+  saveTracking: (body: { brands: string[]; categories: string[]; product_ids: number[]; excluded: number[] }) =>
     call("POST", "/api/settings/tracking", body),
   sync: () => call<{ synced: number; removed: number }>("POST", "/api/sync"),
+  sales: (days: number) => call<{ id: number; sold: number }[]>("GET", `/api/sales?days=${days}`),
   version: () => call<VersionInfo>("GET", "/api/version"),
   trackStatus: () => call<Job>("GET", "/api/track/status").catch(() => null),
 };

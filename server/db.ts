@@ -118,12 +118,14 @@ export function latestPrices(productIds?: number[]): Map<number, { name: string;
 }
 
 /** Products the user chose to track: brand/category pool, then optional
- *  product-level narrowing. Empty selection means everything. */
+ *  product-level narrowing. Empty selection means everything. Products in
+ *  track_excluded ("stopped") are always left out, whatever else is picked. */
 export function activeProducts(products: Product[]): Product[] {
   const brands = new Set(jsonSetting<string[]>("track_brands", []));
   const cats = new Set(jsonSetting<string[]>("track_categories", []));
   const ids = new Set(jsonSetting<number[]>("track_products", []));
-  return products.filter((p) =>
+  const stopped = new Set(jsonSetting<number[]>("track_excluded", []));
+  return products.filter((p) => !stopped.has(p.id) &&
     (!brands.size || brands.has(p.brand ?? "")) &&
     (!cats.size || cats.has(p.category ?? "")) &&
     (!ids.size || ids.has(p.id)));

@@ -1,13 +1,18 @@
 // Rival stores and how PriceBeat reads their prices.
-import { createResource, createSignal, For, Show } from "solid-js";
+import { createMemo, createResource, createSignal, For, onCleanup, Show } from "solid-js";
 import { api, type Competitor, type Detected } from "../api";
 import { money, plural } from "../format";
-import { Favicon } from "../components/ui";
+import { Favicon, SearchIcon } from "../components/ui";
+
+const hostOf = (url: string | null) => {
+  try { return new URL(url ?? "").hostname.toLowerCase().replace(/^www\./, ""); } catch { return ""; }
+};
 
 export default function Competitors() {
   const [list, { refetch }] = createResource(api.competitors);
   const [editing, setEditing] = createSignal<Competitor | null>(null);
   const [note, setNote] = createSignal("");
+  const [finding, setFinding] = createSignal(false);
 
   async function remove(c: Competitor) {
     const listings = c.listings ? ` and its ${plural(c.listings, "tracked listing")} with their history` : "";
@@ -38,8 +43,14 @@ export default function Competitors() {
           <Show when={list()?.length}>
             <button class="btn quiet danger" onClick={resetAll}>Reset all tracking data</button>
           </Show>
+          <button class="btn primary" disabled={finding()} onClick={() => setFinding(true)}>
+            <SearchIcon />Find competitors
+          </button>
         </div>
         <Show when={note()}><div class="note ok" style={{ "margin-bottom": "16px" }}>{note()}</div></Show>
+        <Show when={finding()}>
+          <FindCompetitors existing={list() ?? []} onAdded={refetch} onClose={() => setFinding(false)} />
+        </Show>
 
         <div class="two">
           <div class="card">
@@ -79,6 +90,118 @@ export default function Competitors() {
         </div>
       </div>
     </main>
+  );
+}
+
+type Shop = { host: string; url: string; products: string[] };
+
+/** One Google search per tracked product, tallied by shop: who sells the most
+ *  of your range. Runs from here rather than as a server job so progress and
+ *  Stop come for free; leaving the page stops it too. */
+function FindCompetitors(props: { existing: Competitor[]; onAdded: () => void; onClose: () => void }) {
+  const [shops, setShops] = createSignal<Shop[]>([]);
+  const [progress, setProgress] = createSignal({ done: 0, total: 0 });
+  const [state, setState] = createSignal<"" | "scanning" | "adding">("scanning");
+  const [error, setError] = createSignal("");
+  const [picked, setPicked] = createSignal<string[]>([]);
+  let stopped = false;
+  onCleanup(() => { stopped = true; });
+
+  const known = createMemo(() => new Set(props.existing.flatMap((c) => [c.name.toLowerCase(), hostOf(c.site_url)])));
+
+  async function scan() {
+    const byHost = new Map<string, Shop>();
+    try {
+      const products = await api.products();
+      setProgress({ done: 0, total: products.length });
+      for (const [i, p] of products.entries()) {
+        if (stopped) break;
+        for (const hit of await api.searchProduct(p.id)) {
+          const s = byHost.get(hit.host) ?? { host: hit.host, url: hit.url, products: [] };
+          s.products.push(p.name);
+          byHost.set(hit.host, s);
+        }
+        // Fresh objects, so each row re-renders with its new count.
+        setShops([...byHost.values()].map((s) => ({ ...s, products: [...s.products] }))
+          .sort((a, b) => b.products.length - a.products.length));
+        setProgress({ done: i + 1, total: products.length });
+        await new Promise((r) => setTimeout(r, 1000)); // go easy on Google
+      }
+    } catch (err) {
+      setError((err as Error).message); // e.g. a CAPTCHA: keep what was found so far
+    }
+    // Pre-tick shops that carry two or more of your products.
+    setPicked(shops().filter((s) => s.products.length >= 2 && !known().has(s.host)).map((s) => s.host));
+    setState("");
+  }
+  void scan();
+
+  async function add() {
+    setState("adding");
+    setError("");
+    const failed: string[] = [];
+    for (const host of picked()) {
+      // A product page, not the home page: detection gets a live price to check.
+      try { await api.addCompetitor(shops().find((s) => s.host === host)!.url, ""); }
+      catch (err) { failed.push(`${host}: ${(err as Error).message}`); }
+    }
+    props.onAdded();
+    setPicked(picked().filter((h) => failed.some((f) => f.startsWith(h + ":"))));
+    if (failed.length) setError(`Couldn't add ${plural(failed.length, "store")}. ${failed.join(" · ")}`);
+    setState("");
+  }
+
+  const toggle = (host: string) =>
+    setPicked(picked().includes(host) ? picked().filter((h) => h !== host) : [...picked(), host]);
+
+  return (
+    <div class="card" style={{ "margin-bottom": "18px" }}>
+      <div class="card-head">
+        <h2>Find competitors</h2>
+        <span class="hint" role="status">
+          {state() === "scanning"
+            ? `Searching Google for each tracked product: ${progress().done} of ${progress().total}. About 3 seconds each.`
+            : `${plural(shops().length, "shop")} found across ${plural(progress().done, "product")}.`}
+        </span>
+        <span class="spacer" />
+        <Show when={state() === "scanning"} fallback={<button class="btn quiet small" onClick={props.onClose}>Close</button>}>
+          <button class="btn small" onClick={() => { stopped = true; }}>Stop</button>
+        </Show>
+      </div>
+      <Show when={error()}><div class="note err" role="alert" style={{ margin: "12px 18px 0" }}>{error()}</div></Show>
+      <Show when={shops().length}>
+        <div class="table-wrap finder">
+          <table>
+            <thead><tr><th /><th>Store</th><th class="num">Your products</th><th>Turned up for</th></tr></thead>
+            <tbody>
+              <For each={shops()}>{(s) => {
+                const isKnown = () => known().has(s.host);
+                return (
+                  <tr>
+                    <td><input type="checkbox" disabled={isKnown() || state() === "adding"} checked={picked().includes(s.host)}
+                      onChange={() => toggle(s.host)} aria-label={`Add ${s.host}`} /></td>
+                    <td>
+                      <div class="cell-title">
+                        <Favicon src={`https://www.google.com/s2/favicons?domain=${s.host}&sz=64`} name={s.host} />{s.host}
+                        <Show when={isKnown()}><span class="badge">added</span></Show>
+                      </div>
+                    </td>
+                    <td class="num">{s.products.length}</td>
+                    <td class="fill"><div class="truncate muted" title={s.products.join("\n")}>{s.products.join(", ")}</div></td>
+                  </tr>
+                );
+              }}</For>
+            </tbody>
+          </table>
+        </div>
+        <div class="card-foot row">
+          <button class="btn primary" disabled={!picked().length || !!state()} onClick={add}>
+            {state() === "adding" ? "Adding…" : `Add ${plural(picked().length, "store")}`}
+          </button>
+          <span class="hint">Pre-ticked: shops selling 2 or more of your products. Each store is set up from one of its product pages.</span>
+        </div>
+      </Show>
+    </div>
   );
 }
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { analyze, isNewer, matchStatus, parsePrice } from "../server/pricing";
 import { cleanUrl, detectSource, firstText, fromShopifyJs, jsonldOffer, shopifyJsUrl } from "../server/scrape";
 import { parseResults, refused, shortlist } from "../server/discovery";
-import { unescape } from "../server/woo";
+import { fetchSales, unescape } from "../server/woo";
 
 const fixture = (name: string) => Bun.file(`${import.meta.dir}/fixtures/${name}`).text();
 
@@ -54,6 +54,14 @@ describe("scraping", () => {
     expect(await jsonldOffer(await fixture("simple.html"))).toBeNull();
   });
 
+  test("JSON-LD: entity-encoded type, AUD offer preferred", async () => {
+    // rubbermonkey.com.au (Neto): "+" written as "&#x2B;", NZD offer listed first.
+    const html = `<script type="application/ld&#x2B;json">{"@type":"Product","name":"Case","offers":[
+      {"@type":"Offer","priceCurrency":"NZD","price":"586.99"},
+      {"@type":"Offer","priceCurrency":"AUD","price":"589.00"}]}</script>`;
+    expect(await jsonldOffer(html)).toMatchObject({ price: 589, currency: "AUD" });
+  });
+
   test("firstText: nested text, selector lists in priority order", async () => {
     const html = `<p class="price"><del>$10</del><span class="amount"><bdi>$1,299.<b>00</b></bdi></span></p><i class="amount">$5</i>`;
     expect(await firstText(html, ".price .amount")).toBe("$1,299.00");
@@ -95,31 +103,28 @@ describe("scraping", () => {
 });
 
 describe("discovery", () => {
+  // Google's shape: result links wrap an <h3>; its own links and the hidden
+  // /goto redirects sit alongside.
   const RESULTS = `<html><body>
-    <div><a class="result-title" href="https://rival.example/product/widget?srsltid=Af"><h2>Widget 3000 — Rival</h2></a></div>
-    <div><a class="result-title" href="https://shop2.example/w"><h2>Widget | <b>Shop2</b></h2></a></div>
-    <a href="https://www.startpage.com/do/settings">Settings</a>
-    <div><a class="result-title" href="https://rival.example/product/widget?srsltid=Af"><h2>Widget 3000 — Rival</h2></a></div>
+    <div><a href="https://rival.example/product/widget?srsltid=Af"><br><h3>Widget 3000 — Rival</h3></a></div>
+    <div><a href="/url?q=https://shop2.example/w"><h3>Widget | <b>Shop2</b></h3></a></div>
+    <a href="https://www.google.com/preferences"><h3>Settings</h3></a>
+    <div><a href="/goto?url=CAES"><h3>Hidden</h3></a></div>
+    <div><a href="https://rival.example/product/widget?srsltid=Af"><h3>Widget 3000 — Rival</h3></a></div>
   </body></html>`;
 
   test("parses results in order, de-duplicated, engine links dropped", async () => {
     expect(await parseResults(RESULTS)).toEqual([
       { url: "https://rival.example/product/widget?srsltid=Af", title: "Widget 3000 — Rival" },
       { url: "https://shop2.example/w", title: "Widget | Shop2" },
+      { url: "https://www.google.com/goto?url=CAES", title: "Hidden" },
     ]);
-  });
-
-  test("falls back to any link wrapping a heading", async () => {
-    const html = `<a href="https://rival.example/w"><h3>Widget — Rival</h3></a><a href="/x?q=https://shop2.example/w"><h3>W2</h3></a>`;
-    expect((await parseResults(html)).map((h) => h.url)).toEqual(["https://rival.example/w", "https://shop2.example/w"]);
     expect(await parseResults("<p>no results</p>")).toEqual([]);
   });
 
   test("recognises a refusal", () => {
-    expect(refused(429, "")).toBe(true);
-    expect(refused(200, "Our systems have detected unusual traffic")).toBe(true);
-    expect(refused(200, `<script id="anubis_challenge" type="application/json">{}</script>`)).toBe(true);
-    expect(refused(200, RESULTS)).toBe(false);
+    expect(refused("Our systems have detected unusual traffic")).toBe(true);
+    expect(refused(RESULTS)).toBe(false);
   });
 
   test("shortlist drops own store, socials and repeat sellers", () => {
@@ -132,4 +137,16 @@ describe("discovery", () => {
 
 test("Woo names are HTML-unescaped", () => {
   expect(unescape("Bags &amp; Cases &#8211; Big&#x21; &bogus;")).toBe("Bags & Cases – Big! &bogus;");
+});
+
+test("fetchSales tallies units per variation, else product", async () => {
+  const urls: string[] = [];
+  const pages = [[
+    { line_items: [{ product_id: 10, variation_id: 0, quantity: 2 }, { product_id: 20, variation_id: 21, quantity: 1 }] },
+    { line_items: [{ product_id: 10, variation_id: 0, quantity: 3 }] },
+  ], []];
+  const fetcher = (async (url: string) => { urls.push(url); return Response.json(pages[urls.length - 1]); }) as typeof fetch;
+  const sold = await fetchSales("https://me.com/", "ck", "cs", 30, fetcher);
+  expect([...sold]).toEqual([[10, 5], [21, 1]]);
+  expect(urls[0]).toMatch(/^https:\/\/me\.com\/wp-json\/wc\/v3\/orders\?after=\d{4}-.*&status=processing,completed&_fields=line_items&per_page=100&page=1$/);
 });

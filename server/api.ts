@@ -3,11 +3,11 @@
 import { activeProducts, db, deleteMapping, getSetting, iso, jsonSetting, latestPrices,
          nowStamp, setSetting, type Competitor, type Mapping, type Product, type Snapshot } from "./db";
 import { VERSION } from "./config";
-import { discover, SearchBlocked } from "./discovery";
+import { discover, googleSearch, SearchBlocked, shortlist } from "./discovery";
 import { isRunning, latestJob, runTracking, startJob } from "./engine";
 import { analyze, isNewer, money } from "./pricing";
 import { cleanUrl, detectSource, fetchPrice, hostOf } from "./scrape";
-import { applySync, fetchProducts } from "./woo";
+import { applySync, fetchProducts, fetchSales } from "./woo";
 
 export class HttpError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -140,7 +140,22 @@ export async function versionStatus(fetcher: typeof fetch = fetch) {
   versionCache = { at: Date.now(), value };
   return value;
 }
-export const resetVersionCache = () => { versionCache = null; };
+
+/** Run a Woo call with the saved connection, as a 400 when there is none and a
+ *  502 when the store fails. */
+async function withStore<T>(what: string, call: (base: string, key: string, secret: string) => Promise<T>) {
+  const base = getSetting("woo_base_url").trim();
+  if (!base) throw new HttpError(400, "Connect your store first (store URL and API keys in Settings)");
+  try { return await call(base, getSetting("woo_key"), getSetting("woo_secret")); }
+  catch (err) {
+    throw new HttpError(502, `Couldn't fetch ${what} from the store: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/** Other stores you run, as bare hosts. Search leaves them out like your own. */
+const ownStores = () => jsonSetting<string[]>("own_stores", []);
+const ownHosts = (p: Product) =>
+  new Set([hostOf(getSetting("woo_base_url")), hostOf(p.permalink), ...ownStores()].filter(Boolean));
 
 // ---- routes -------------------------------------------------------------------
 
@@ -151,6 +166,17 @@ export const routes: Record<string, Partial<Record<"GET" | "POST" | "PATCH" | "D
 
   "/api/products/:id/track": {
     POST: async (req) => { product(id(req)); return runTracking({ productIds: [id(req)] }); },
+  },
+
+  // Stop tracking one product: it leaves the product list and price runs.
+  // Rivals and history stay, and Settings can bring it back.
+  "/api/products/:id/stop": {
+    POST: (req) => {
+      const pid = product(id(req)).id;
+      const stopped = jsonSetting<number[]>("track_excluded", []);
+      if (!stopped.includes(pid)) setSetting("track_excluded", JSON.stringify([...stopped, pid]));
+      return { ok: true };
+    },
   },
 
   "/api/track": {
@@ -199,12 +225,25 @@ export const routes: Record<string, Partial<Record<"GET" | "POST" | "PATCH" | "D
     POST: async (req) => {
       const p = product(id(req));
       const q = String((await body<{ query?: string }>(req)).query ?? "").trim() || p.name.trim();
-      const own = new Set([hostOf(getSetting("woo_base_url")), hostOf(p.permalink)].filter(Boolean));
       const tracked = new Set(db.query<{ identifier: string }, [number]>(
         "SELECT identifier FROM mapping WHERE product_id = ?").all(p.id).map((m) => m.identifier));
       try {
-        const candidates = await discover(p.name, p.sku, q, own, tracked);
+        const candidates = await discover(p.name, p.sku, q, ownHosts(p), tracked);
         return { query: q, candidates: candidates.map((c) => ({ ...c, price: money(c.price) })) };
+      } catch (err) {
+        if (err instanceof SearchBlocked) throw new HttpError(502, err.message);
+        throw err;
+      }
+    },
+  },
+  // Search only: which shops turn up for this product. No page is fetched, so
+  // the Competitors page can run it across the whole catalogue quickly.
+  "/api/products/:id/search": {
+    POST: async (req) => {
+      const p = product(id(req));
+      try {
+        return shortlist(await googleSearch(p.name.trim()), ownHosts(p), 10)
+          .map((h) => ({ ...h, host: hostOf(h.url) }));
       } catch (err) {
         if (err instanceof SearchBlocked) throw new HttpError(502, err.message);
         throw err;
@@ -304,17 +343,25 @@ export const routes: Record<string, Partial<Record<"GET" | "POST" | "PATCH" | "D
       return {
         woo_base_url: getSetting("woo_base_url"),
         woo_key_set: !!getSetting("woo_key"), woo_secret_set: !!getSetting("woo_secret"),
+        own_stores: ownStores().join(", "),
         track_brands: jsonSetting("track_brands", []),
         track_categories: jsonSetting("track_categories", []),
         track_products: jsonSetting("track_products", []),
+        track_excluded: jsonSetting("track_excluded", []),
+        // Sync stamps every product it touches, so the newest stamp is the last sync.
+        last_synced: iso(products.reduce<string | null>((m, p) => (!m || p.updated_at > m ? p.updated_at : m), null)),
         available_brands: distinct((p) => p.brand),
         available_categories: distinct((p) => p.category),
-        available_products: products.map(({ id, name, sku, brand, category }) => ({ id, name, sku, brand, category })),
+        available_products: products.map(({ id, name, sku, brand, category, own_price }) =>
+          ({ id, name, sku, brand, category, price: money(own_price) })),
       };
     },
     POST: async (req) => {
-      const b = await body<{ woo_base_url?: string; woo_key?: string; woo_secret?: string }>(req);
+      const b = await body<{ woo_base_url?: string; woo_key?: string; woo_secret?: string; own_stores?: string }>(req);
       setSetting("woo_base_url", (b.woo_base_url ?? "").trim());
+      // "giggear.com.au, https://www.other.com/" → ["giggear.com.au", "other.com"]
+      setSetting("own_stores", JSON.stringify((b.own_stores ?? "").split(/[\s,]+/)
+        .map((s) => hostOf(s.includes("://") ? s : `https://${s}`)).filter(Boolean)));
       // Blank means keep the stored one, so secrets never need re-entering.
       if (b.woo_key) setSetting("woo_key", b.woo_key.trim());
       if (b.woo_secret) setSetting("woo_secret", b.woo_secret.trim());
@@ -323,23 +370,27 @@ export const routes: Record<string, Partial<Record<"GET" | "POST" | "PATCH" | "D
   },
   "/api/settings/tracking": {
     POST: async (req) => {
-      const b = await body<{ brands?: string[]; categories?: string[]; product_ids?: number[] }>(req);
+      const b = await body<{ brands?: string[]; categories?: string[]; product_ids?: number[]; excluded?: number[] }>(req);
       setSetting("track_brands", JSON.stringify(b.brands ?? []));
       setSetting("track_categories", JSON.stringify(b.categories ?? []));
       setSetting("track_products", JSON.stringify(b.product_ids ?? []));
+      setSetting("track_excluded", JSON.stringify(b.excluded ?? []));
       return { ok: true };
     },
   },
   "/api/sync": {
-    POST: async () => {
-      const base = getSetting("woo_base_url").trim();
-      if (!base) throw new HttpError(400, "Connect your store first (store URL and API keys in Settings)");
-      let products;
-      try { products = await fetchProducts(base, getSetting("woo_key"), getSetting("woo_secret")); }
-      catch (err) {
-        throw new HttpError(502, `Couldn't fetch products from the store: ${err instanceof Error ? err.message : err}`);
-      }
-      return applySync(products);
+    POST: async () => applySync(await withStore("products", fetchProducts)),
+  },
+  // Units sold per synced product over the last `days`, best first. Products
+  // with no sales are left out.
+  "/api/sales": {
+    GET: async (req) => {
+      const days = Math.min(Math.max(Number(new URL(req.url).searchParams.get("days")) || 90, 1), 3650);
+      const sold = await withStore("orders", (b, k, s) => fetchSales(b, k, s, days));
+      return db.query<{ id: number; woo_id: number }, []>("SELECT id, woo_id FROM product").all()
+        .map((p) => ({ id: p.id, sold: sold.get(p.woo_id) ?? 0 }))
+        .filter((r) => r.sold > 0)
+        .sort((a, b) => b.sold - a.sold);
     },
   },
 

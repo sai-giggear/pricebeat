@@ -82,8 +82,8 @@ export function applyResult(product: Product, mappingId: number, r: PriceResult,
 }
 
 /** Hosts run in parallel (up to maxConcurrentHosts); each host's own URLs go
- *  one at a time with scrapeDelayMs between them, so being polite to one
- *  competitor doesn't slow the others. */
+ *  one at a time, their starts at least scrapeDelayMs apart, so being polite to
+ *  one competitor doesn't slow the others. */
 export async function runTracking(opts: {
   productIds?: number[]; mappingIds?: number[]; dueOnly?: boolean;
   progress?: (done: number, total: number) => void; fetcher?: Fetcher;
@@ -106,8 +106,13 @@ export async function runTracking(opts: {
 
   async function worker() {
     for (let items = queue.shift(); items; items = queue.shift()) {
-      for (const [i, { product, mapping }] of items.entries()) {
-        if (i && settings.scrapeDelayMs) await Bun.sleep(settings.scrapeDelayMs);
+      let lastStart = -Infinity;
+      for (const { product, mapping } of items) {
+        // Gap measured from the previous request's start: a host that took longer
+        // than the gap to answer has already had its breather.
+        const wait = lastStart + settings.scrapeDelayMs - Date.now();
+        if (wait > 0) await Bun.sleep(wait);
+        lastStart = Date.now();
         let r: PriceResult;
         try {
           r = await fetcher(mapping.identifier, configs.get(mapping.competitor_id) ?? { source: "auto", price_selector: "" });

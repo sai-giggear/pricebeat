@@ -1,6 +1,6 @@
 // Split view: the catalogue on the left, the selected product on the right.
 import { A, useParams } from "@solidjs/router";
-import { createMemo, createResource, createSignal, For, Show } from "solid-js";
+import { createMemo, createResource, createSelector, createSignal, For, Show } from "solid-js";
 import { api, dataVersion, job, running, type ProductRow } from "../api";
 import { gapPct, money, num, pct1, plural } from "../format";
 import { DownloadIcon, SearchIcon } from "../components/ui";
@@ -19,6 +19,15 @@ export default function Products() {
   const [brand, setBrand] = createSignal("");
   const [category, setCategory] = createSignal("");
   const [sort, setSort] = createSignal<Sort>("name");
+  // Top N sellers over the chosen period; 0 is off. Orders are read only while it's on.
+  const [top, setTop] = createSignal(0);
+  const [days, setDays] = createSignal(90);
+  const [sales] = createResource(() => top() > 0 && days(),
+    (days) => api.sales(days).then((r) => new Map(r.map((x) => [x.id, x.sold]))));
+  const sold = () => (sales.state === "ready" ? sales() : undefined);
+  // One tracked comparison per row would rerun on every pick; this wakes only
+  // the old and new active rows.
+  const isActive = createSelector(() => params.id);
 
   const all = () => rows() ?? [];
   const counts = createMemo(() => {
@@ -38,8 +47,11 @@ export default function Products() {
       (!brand() || r.brand === brand()) &&
       (!category() || r.category === category()) &&
       (!s || r.name.toLowerCase().includes(s) || (r.sku ?? "").toLowerCase().includes(s)));
+    const n = sold();
+    if (top() && !n) return [];
+    const kept = n ? out.filter((r) => n.has(r.id)).sort((a, b) => n.get(b.id)! - n.get(a.id)!).slice(0, top()) : out;
     const gap = (r: ProductRow) => gapPct(r.own_price, r.lowest_price) ?? -Infinity;
-    return out.sort(
+    return kept.sort(
       sort() === "gap" ? (a, b) => gap(b) - gap(a)
       : sort() === "price" ? (a, b) => num(b.own_price)! - num(a.own_price)!
       : (a, b) => a.name.localeCompare(b.name));
@@ -81,7 +93,7 @@ export default function Products() {
   };
 
   return (
-    <div class="split" classList={{ "has-detail": !!params.id }}>
+    <div class="split">
       <aside class="list-pane" aria-label="Products">
         <div class="list-tools">
           <div class="search">
@@ -108,16 +120,26 @@ export default function Products() {
                 <For each={categories()}>{(c) => <option>{c}</option>}</For>
               </select>
             </Show>
-            <select class="input" aria-label="Sort" value={sort()} onInput={(e) => setSort(e.currentTarget.value as Sort)}>
-              <option value="name">A to Z</option>
-              <option value="gap">Biggest gap</option>
-              <option value="price">Highest price</option>
+            <select class="input" aria-label="Top sellers" value={top()} onInput={(e) => setTop(Number(e.currentTarget.value))}>
+              <option value={0}>Any sales</option>
+              <For each={[10, 25, 50, 100]}>{(n) => <option value={n}>Top {n} sellers</option>}</For>
             </select>
+            <Show when={top()}>
+              <select class="input" aria-label="Sales period" value={days()} onInput={(e) => setDays(Number(e.currentTarget.value))}>
+                <option value={7}>7 days</option>
+                <option value={30}>30 days</option>
+                <option value={90}>90 days</option>
+                <option value={365}>12 months</option>
+                <option value={730}>2 years</option>
+              </select>
+            </Show>
           </div>
         </div>
 
         <ul class="list">
-          <Show when={!rows.loading || rows()} fallback={<li class="empty">Loading…</li>}>
+          <Show when={!(top() && sales.error)} fallback={<li class="empty">{(sales.error as Error)?.message}</li>}>
+          <Show when={(!rows.loading || rows()) && !(top() && sales.loading)}
+            fallback={<li class="empty">{top() && sales.loading ? "Reading orders…" : "Loading…"}</li>}>
             <For each={visible()} fallback={
               <li class="empty">
                 <Show when={all().length} fallback={<><div class="big">No products yet</div>Connect your store in <A href="/settings">Settings</A>.</>}>
@@ -128,21 +150,23 @@ export default function Products() {
                 const gap = () => gapPct(r.own_price, r.lowest_price);
                 return (
                   <li>
-                    <A href={`/p/${r.id}`} class="item" classList={{ active: params.id === String(r.id) }}>
+                    {/* Plain <a>: the router picks up the click without a component per row. */}
+                    <a href={`/p/${r.id}`} class="item" classList={{ active: isActive(String(r.id)) }}>
                       <span class={`dot ${r.has_data ? (r.is_lowest ? "good" : "bad") : ""}`}
                         title={r.has_data ? (r.is_lowest ? "You're lowest" : "A rival is cheaper") : "No rival prices yet"} />
                       <span class="name">{r.name}</span>
                       <span class="price num">{money(r.own_price)}</span>
-                      <span class="meta">{[r.brand, r.sku].filter(Boolean).join(" · ") || " "}</span>
+                      <span class="meta">{[r.brand, r.sku, sold()?.has(r.id) && `${sold()!.get(r.id)} sold`].filter(Boolean).join(" · ") || " "}</span>
                       <span class="pos num" classList={{ good: r.has_data && r.is_lowest, bad: r.has_data && !r.is_lowest }}>
                         {!r.has_data ? <span class="muted">no data</span>
                           : r.is_lowest ? "lowest" : `+${pct1(gap() ?? 0)}%`}
                       </span>
-                    </A>
+                    </a>
                   </li>
                 );
               }}
             </For>
+          </Show>
           </Show>
         </ul>
 
@@ -151,6 +175,11 @@ export default function Products() {
             {(n) => <span style={{ color: n().err ? "var(--bad-ink)" : "var(--good-ink)" }}>{n().text}</span>}
           </Show>
           <span class="spacer" />
+          <select class="input" aria-label="Sort" value={sort()} onInput={(e) => setSort(e.currentTarget.value as Sort)}>
+            <option value="name">A to Z</option>
+            <option value="gap">Biggest gap</option>
+            <option value="price">Highest price</option>
+          </select>
           <button class="btn quiet small" disabled={!visible().length} onClick={exportCsv}
             title="Download this list as CSV, with current filters and sort">
             <DownloadIcon />CSV

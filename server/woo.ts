@@ -47,21 +47,27 @@ function build(row: Row, brand: string | null, category: string | null,
   };
 }
 
-export async function fetchProducts(baseUrl: string, key: string, secret: string,
-                                    fetcher: typeof fetch = fetch): Promise<WooProduct[]> {
+/** GET every page of a Woo REST collection. `path` may carry its own query. */
+function pager(baseUrl: string, key: string, secret: string, fetcher: typeof fetch) {
   const base = baseUrl.replace(/\/+$/, "");
   const auth = "Basic " + btoa(`${key}:${secret}`);
-  async function pages(path: string): Promise<Row[]> {
+  return async (path: string): Promise<Row[]> => {
     const all: Row[] = [];
+    const sep = path.includes("?") ? "&" : "?";
     for (let page = 1; ; page++) {
-      const resp = await fetcher(`${base}/wp-json/wc/v3/${path}?per_page=100&page=${page}`,
+      const resp = await fetcher(`${base}/wp-json/wc/v3/${path}${sep}per_page=100&page=${page}`,
         { headers: { Authorization: auth }, signal: AbortSignal.timeout(30_000) });
       if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${base}`);
       const rows = (await resp.json()) as Row[];
       if (!Array.isArray(rows) || !rows.length) return all;
       all.push(...rows);
     }
-  }
+  };
+}
+
+export async function fetchProducts(baseUrl: string, key: string, secret: string,
+                                    fetcher: typeof fetch = fetch): Promise<WooProduct[]> {
+  const pages = pager(baseUrl, key, secret, fetcher);
   const out: WooProduct[] = [];
   for (const r of await pages("products")) {
     const brand = firstName(r.brands), category = firstName(r.categories);
@@ -77,6 +83,24 @@ export async function fetchProducts(baseUrl: string, key: string, secret: string
     }
   }
   return out;
+}
+
+/** Units sold per Woo id over the last `days`, from paid orders. Keyed the way
+ *  product.woo_id is: the variation id for variations, else the product id.
+ *  Refunds are not subtracted. */
+export async function fetchSales(baseUrl: string, key: string, secret: string, days: number,
+                                 fetcher: typeof fetch = fetch): Promise<Map<number, number>> {
+  const after = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 19);
+  const orders = await pager(baseUrl, key, secret, fetcher)(
+    `orders?after=${after}&status=processing,completed&_fields=line_items`);
+  const sold = new Map<number, number>();
+  for (const o of orders) {
+    for (const li of o.line_items ?? []) {
+      const id = Number(li.variation_id || li.product_id);
+      sold.set(id, (sold.get(id) ?? 0) + (Number(li.quantity) || 0));
+    }
+  }
+  return sold;
 }
 
 /** Upsert the fetched catalogue, then delete products no longer in the feed

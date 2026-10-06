@@ -1,10 +1,10 @@
 // One product: where it stands, its price history, and the rivals tracked for it.
-import { A } from "@solidjs/router";
+import { useNavigate } from "@solidjs/router";
 import { createResource, createSignal, For, Show } from "solid-js";
 import { api, dataVersion, type Candidate, type ProductRow } from "../api";
 import { gapPct, money, num, offPct, pct1, plural, timeAgo } from "../format";
 import PriceChart, { seriesColor } from "../components/PriceChart";
-import { BackIcon, ExternalIcon, Favicon, MatchBadge, PlusIcon, ProductPicker, RefreshIcon, SearchIcon } from "../components/ui";
+import { ExternalIcon, Favicon, MatchBadge, PlusIcon, ProductPicker, RefreshIcon, SearchIcon } from "../components/ui";
 
 export default function Detail(props: { id: number; products: ProductRow[]; onChange: () => void }) {
   const [detail, { refetch }] = createResource(() => [props.id, dataVersion()] as const, ([id]) => api.product(id));
@@ -12,6 +12,24 @@ export default function Detail(props: { id: number; products: ProductRow[]; onCh
   const [error, setError] = createSignal("");
   const [panel, setPanel] = createSignal<"" | "find" | "add">("");
   const [moving, setMoving] = createSignal<number | null>(null);
+  const navigate = useNavigate();
+
+  // Reversible from Settings, so a plain confirm is enough.
+  async function stop(name: string) {
+    if (!confirm(`Stop tracking ${name}?
+
+It leaves the product list and price checks. Its rivals and price history are kept, and you can bring it back in Settings.`)) return;
+    setBusy("stop");
+    setError("");
+    try {
+      await api.stopTracking(props.id);
+      props.onChange();
+      navigate("/");
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(null);
+    }
+  }
 
   async function act(key: string, fn: () => Promise<unknown>) {
     setBusy(key);
@@ -36,7 +54,6 @@ export default function Detail(props: { id: number; products: ProductRow[]; onCh
           <div class="detail">
             <div class="detail-head">
               <div>
-                <A href="/" class="btn quiet small back"><BackIcon />All products</A>
                 <div class="eyebrow">
                   <Show when={d().brand}><span>{d().brand}</span></Show>
                   <Show when={d().sku}><span class="mono">{d().sku}</span></Show>
@@ -48,6 +65,10 @@ export default function Detail(props: { id: number; products: ProductRow[]; onCh
                 <Show when={d().permalink}>
                   <a class="btn" href={d().permalink!} target="_blank" rel="noreferrer">Your listing <ExternalIcon /></a>
                 </Show>
+                <button class="btn quiet danger" disabled={!!busy()} onClick={() => stop(d().name)}
+                  title="Hide this product and skip it in price checks">
+                  {busy() === "stop" ? "Stopping…" : "Stop tracking"}
+                </button>
                 <button class="btn primary" disabled={!!busy() || !d().mappings.length}
                   onClick={() => act("all", () => api.trackProduct(d().id))}>
                   <RefreshIcon spinning={busy() === "all"} />{busy() === "all" ? "Fetching…" : "Fetch prices"}
@@ -127,7 +148,7 @@ export default function Detail(props: { id: number; products: ProductRow[]; onCh
                         return (
                           <>
                             <tr>
-                              <td>
+                              <td class="fill">
                                 <div class="cell-title">
                                   <span class="key" style={{ "border-color": seriesColor(i()) }} aria-hidden="true" />
                                   <Favicon src={m.favicon_url} name={m.competitor_name} />
@@ -155,11 +176,11 @@ export default function Detail(props: { id: number; products: ProductRow[]; onCh
                                   </span>
                                 </Show>
                               </td>
-                              <td>
+                              <td class="checked">
                                 <div>{timeAgo(m.last_checked_at) ?? <span class="muted">never</span>}</div>
                                 <Show when={m.last_status && m.last_status !== "ok"}>
-                                  <div class="cell-sub" style={{ color: "var(--bad-ink)" }} title={m.last_error ?? ""}>
-                                    last fetch {m.last_status}
+                                  <div class="cell-sub error" title={m.last_error ?? ""}>
+                                    {m.last_error ?? `last fetch ${m.last_status}`}
                                   </div>
                                 </Show>
                                 <Show when={m.last_status === "ok"}>

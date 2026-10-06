@@ -75,6 +75,18 @@ test("bulk runs respect the tracking filter", async () => {
   expect(await runTracking({ fetcher: async () => ok(1) })).toMatchObject({ products: 1, snapshots: 1 });
 });
 
+test("a stopped product leaves the list and bulk runs, even when hand-picked", async () => {
+  setSetting("track_products", JSON.stringify([2]));
+  await call("/api/products/:id/stop", "POST", { id: "2" });
+  await call("/api/products/:id/stop", "POST", { id: "2" }); // twice is harmless
+  expect((await call("/api/settings", "GET")).track_excluded).toEqual([2]);
+  expect(await call("/api/products", "GET")).toEqual([]);
+  expect(await runTracking({ fetcher: async () => ok(1) })).toMatchObject({ products: 0, snapshots: 0 });
+  setSetting("track_products", "[]");
+  expect((await call("/api/products", "GET")).map((r: any) => r.id)).toEqual([1]);
+  await expect(call("/api/products/:id/stop", "POST", { id: "99" })).rejects.toMatchObject({ status: 404 });
+});
+
 test("prune keeps the newest and newest-ok snapshot per mapping", () => {
   db.exec(`INSERT INTO pricesnapshot (mapping_id, price, currency, in_stock, fetched_at, status) VALUES
     (1, 10, 'AUD', 1, '2020-01-01 00:00:00', 'ok'), (1, 11, 'AUD', 1, '2020-01-02 00:00:00', 'ok'),

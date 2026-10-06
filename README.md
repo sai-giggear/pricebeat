@@ -73,11 +73,14 @@ review sites are left out. Marketplaces stay in, since their sellers are who
 you price against.
 
 No API key is needed. Google returns an empty JavaScript shell to plain HTTP
-clients, so the query goes through Startpage, which runs it against Google and
-returns plain HTML. Two consequences:
+clients, so PriceBeat runs the search in this computer's Chrome or Edge,
+headless (no window). That means:
 
-- Results follow the region of the machine running PriceBeat. There is no
-  region setting.
+- Chrome or Edge must be installed. Set `BROWSER_PATH` if it lives somewhere
+  unusual.
+- Results are pinned to Australia (`gl=au`).
+- The search browser keeps its own profile in `%LOCALAPPDATA%\PriceBeat\search-browser`,
+  separate from your everyday browser.
 - Heavy use eventually meets a CAPTCHA. The UI then says the search was
   blocked, rather than showing an empty list.
 
